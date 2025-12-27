@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>BPSR S1 Spec Navigator</title>
+    <style>
+        :root {
+            --bg: #0d1117; --panel: #161b22; --accent: #58a6ff;
+            --gold: #d4af37; --text: #c9d1d9; --sub-text: #8b949e;
+            --danger: #f85149; --success: #3fb950;
+        }
+        body { font-family: 'Segoe UI', 'Microsoft YaHei', 'Meiryo', sans-serif; background: var(--bg); color: var(--text); padding: 15px; margin: 0; }
+        .container { max-width: 800px; margin: auto; padding-top: 50px; padding-bottom: 80px; }
+        
+        .lang-switch { position: fixed; top: 15px; right: 15px; display: flex; gap: 5px; z-index: 1000; background: var(--panel); padding: 5px; border-radius: 8px; border: 1px solid #30363d; }
+        .lang-btn { padding: 8px 16px; background: #21262d; border: 1px solid #30363d; color: var(--text); border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.85rem; }
+        .lang-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+        .filter-section { background: var(--panel); padding: 25px; border-radius: 12px; border: 1px solid #30363d; margin-bottom: 25px; }
+        .step-box { margin-bottom: 20px; }
+        .step-label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: var(--accent); font-weight: bold; }
+        select { width: 100%; padding: 12px; background: #0d1117; color: white; border: 1px solid #444c56; border-radius: 8px; font-size: 1rem; }
+
+        .equip-card { background: #1c2128; border: 1px solid #30363d; border-radius: 10px; overflow: hidden; margin-bottom: 20px; }
+        .equip-header { background: rgba(0,0,0,0.3); padding: 12px 20px; border-bottom: 2px solid var(--gold); }
+        .part-name { font-size: 1.1rem; font-weight: bold; color: var(--gold); }
+
+        .judge-banner { padding: 10px 20px; font-weight: bold; font-size: 0.9rem; border-bottom: 1px solid #30363d; }
+        .no-drop { background: rgba(248, 81, 73, 0.15); color: #ff7b72; border-left: 5px solid var(--danger); }
+        .can-drop { background: rgba(63, 185, 80, 0.15); color: #7ee787; border-left: 5px solid var(--success); }
+
+        .stat-area { padding: 15px 20px; }
+        .stat-line { display: flex; justify-content: space-between; margin-bottom: 6px; }
+        .highlight { color: var(--accent); font-weight: bold; }
+        .ng-stat { color: #8b949e; text-decoration: line-through; opacity: 0.5; }
+    </style>
+</head>
+<body>
+
+<div class="lang-switch">
+    <button class="lang-btn active" id="btn-JP" onclick="setLang('JP')">日本語</button>
+    <button class="lang-btn" id="btn-CN" onclick="setLang('CN')">中国語</button>
+    <button class="lang-btn" id="btn-NA" onclick="setLang('NA')">English</button>
+</div>
+
+<div class="container">
+    <div class="filter-section">
+        <div class="step-box">
+            <label class="step-label" id="l-step1">1. クラス</label>
+            <select id="classSel" onchange="refreshSpecs(); render();"></select>
+        </div>
+        <div class="step-box">
+            <label class="step-label" id="l-step2">2. 型 (Spec)</label>
+            <select id="typeSel" onchange="onTypeSelect()"></select>
+        </div>
+        <div class="step-box">
+            <label class="step-label" id="l-step3">3. ランク</label>
+            <select id="rankSel" onchange="render()"></select>
+        </div>
+    </div>
+    <div id="viewArea"></div>
+</div>
+
+<script>
+    let curLang = 'JP';
+
+    // 部位ごとのドロップ不可属性マトリックス（死守）
+    const FORBIDDEN_BY_PART = {
+        "頭": ["万能", "ファスト", "会心"],
+        "体": ["幸運", "器用さ", "会心"],
+        "手": ["ファスト", "会心", "万能"],
+        "足": ["器用さ", "会心", "幸運"],
+        "耳": ["器用さ", "ファスト", "万能"],
+        "首": ["ファスト", "器用さ", "幸運"],
+        "指": ["幸運", "万能", "器用さ"],
+        "L": ["会心", "万能", "ファスト"],
+        "R": ["会心", "幸運", "器用さ"],
+        "守": ["万能", "幸運", "ファスト"]
+    };
+
+    // 余計な補足なしのランク翻訳
+    const RANKS = [
+        { id: "40P", JP: "40紫", CN: "40紫", NA: "40 Epic" },
+        { id: "40G", JP: "40金[極]", CN: "40金[极]", NA: "40 Gold [Max]" },
+        { id: "60P", JP: "60紫", CN: "60紫", NA: "60 Epic" },
+        { id: "60G", JP: "60金[極]", CN: "60金[极]", NA: "60 Gold [Max]" },
+        { id: "70R", JP: "70赤", CN: "70红", NA: "70 Relic" },
+        { id: "80G", JP: "80金[極]", CN: "80金[极]", NA: "80 Gold [Max]" },
+        { id: "100G", JP: "100金", CN: "100金", NA: "100 Gold" }
+    ];
+
+    const CLASSES = {
+        "HG": { JP:"ヘヴィガーディアン", CN:"巨刃守护者", NA:"Heavy Guardian", specs:["Earthbeat Spec", "Wock Spec"] },
+        "SF": { JP:"シールドファイター", CN:"神盾騎士", NA:"Shield Fighter", specs:["Haarvery Spec", "Thiaid Spec"] },
+        "GL": { JP:"ゲイルランサー", CN:"青岚骑士", NA:"Gale Lancer", specs:["Vanguard Spec", "Skyward Spec"] },
+        "SB": { JP:"ストームブレイド", CN:"雷影剑士", NA:"Storm Blade", specs:["Mboostine Spec", "Electra Spec"] },
+        "DA": { JP:"ディバインアーチャー", CN:"神射手", NA:"Divine Archer", specs:["Markm Spec", "Wittck Spec"] },
+        "FM": { JP:"フロストメイジ", CN:"氷魔導師", NA:"Frost Mage", specs:["Frostbeam Spec", "Ice Spec"] },
+        "VO": { JP:"ヴァーダントオラクル", CN:"森语者", NA:"Verndme Oracle", specs:["Sinite Spec", "Lifebind Spec"] },
+        "BP": { JP:"ビートパフォーマー", CN:"霊魂楽手", NA:"Beat Performer", specs:["Concerte Spec", "Soul Musician"] }
+    };
+
+    const SPECS = {
+        "Earthbeat Spec": { JP:"剛身型", CN:"刚身型", NA:"Earthbeat", main:"筋力", sub:["器用さ", "万能"] }, 
+        "Wock Spec": { JP:"剛守型", CN:"刚守型", NA:"Wock", main:"筋力", sub:["幸運", "器用さ"] },
+        "Haarvery Spec": { JP:"光砕型", CN:"光碎型", NA:"Haarvery", main:"筋力", sub:["会心", "器用さ"] }, 
+        "Thiaid Spec": { JP:"光盾型", CN:"光盾型", NA:"Thiaid", main:"筋力", sub:["器用さ", "ファスト"] },
+        "Vanguard Spec": { JP:"烈風型", CN:"烈风型", NA:"Vanguard", main:"筋力", sub:["ファスト", "器用さ"] }, 
+        "Skyward Spec": { JP:"乱風型", CN:"乱風型", NA:"Skyward", main:"筋力", sub:["会心", "幸運"] },
+        "Mboostine Spec": { JP:"雷刃型", CN:"雷刃型", NA:"Mboostine", main:"敏捷", sub:["会心", "器用さ"] }, 
+        "Electra Spec": { JP:"月影型", CN:"月影型", NA:"Electra", main:"敏捷", sub:["ファスト", "幸運"] },
+        "Markm Spec": { JP:"狼弓型", CN:"狼弓型", NA:"Markm", main:"敏捷", sub:["器用さ", "ファスト"] }, 
+        "Wittck Spec": { JP:"鷹弓型", CN:"鹰弓型", NA:"Wittck", main:"敏捷", sub:["会心", "ファスト"] },
+        "Frostbeam Spec": { JP:"氷牙型", CN:"冰牙型", NA:"Frostbeam", main:"知力", sub:["会心", "幸運"] }, 
+        "Ice Spec": { JP:"霜天型", CN:"霜天型", NA:"Ice", main:"知力", sub:["ファスト", "器用さ"] },
+        "Sinite Spec": { JP:"威咲型", CN:"威咲型", NA:"Sinite", main:"知力", sub:["幸運", "器用さ"] }, 
+        "Lifebind Spec": { JP:"森癒型", CN:"森愈型", NA:"Lifebind", main:"知力", sub:["器用さ", "ファスト"] },
+        "Concerte Spec": { JP:"狂音型", CN:"狂音型", NA:"Concerte", main:"知力", sub:["幸運", "ファスト"] }, 
+        "Soul Musician": { JP:"響奏型", CN:"响奏型", NA:"Soul Musician", main:"知力", sub:["会心", "ファスト"] }
+    };
+
+    const STAT_DIC = {
+        "筋力": { JP:"筋力", CN:"威力", NA:"STR" }, "敏捷": { JP:"敏捷", CN:"敏捷", NA:"AGI" }, "知力": { JP:"知力", CN:"智力", NA:"INT" },
+        "器用さ": { JP:"器用さ", CN:"精通", NA:"DEX" }, "万能": { JP:"万能", CN:"万能", NA:"Univ" }, "幸運": { JP:"幸運", CN:"幸运", NA:"LUK" },
+        "会心": { JP:"会心", CN:"会心", NA:"CRIT" }, "ファスト": { JP:"ファスト", CN:"急速", NA:"FAST" }
+    };
+
+    const UI = {
+        JP: { s1:"1. クラス", s2:"2. 型 (Spec)", s3:"3. ランク", ok:"✅ ドロップ可能", ng:"⚠️ 生産限定" },
+        CN: { s1:"1. 职业", s2:"2. 流派", s3:"3. 等级", ok:"✅ 副本可掉落", ng:"⚠️ 必须制作" },
+        NA: { s1:"1. Class", s2:"2. Spec", s3:"3. Rank", ok:"✅ Dungeon Drop", ng:"⚠️ Craft Only" }
+    };
+
+    const PARTS = [{id:"頭",n:"頭 (Helm)"},{id:"体",n:"体 (Armor)"},{id:"手",n:"手 (Glove)"},{id:"足",n:"足 (Boots)"},{id:"耳",n:"耳 (Earring)"},{id:"首",n:"首 (Neck)"},{id:"指",n:"指輪 (Ring)"},{id:"L",n:"L指 (L-Ring)"},{id:"R",n:"R指 (R-Ring)"},{id:"守",n:"守 (Amulet)"}];
+
+    function setLang(lang) {
+        curLang = lang;
+        document.querySelectorAll('.lang-btn').forEach(b => b.classList.toggle('active', b.id === `btn-${lang}`));
+        initSelectors();
+        render();
+    }
+
+    function initSelectors() {
+        const u = UI[curLang];
+        document.getElementById('l-step1').innerText = u.s1;
+        document.getElementById('l-step2').innerText = u.s2;
+        document.getElementById('l-step3').innerText = u.s3;
+
+        const cs = document.getElementById('classSel');
+        const oldC = cs.value;
+        cs.innerHTML = `<option value="">-- Class --</option>`;
+        for(let id in CLASSES) cs.innerHTML += `<option value="${id}" ${id===oldC?'selected':''}>${CLASSES[id][curLang]}</option>`;
+
+        refreshSpecs();
+
+        const rs = document.getElementById('rankSel');
+        const oldR = rs.value;
+        rs.innerHTML = '<option value="">-- Rank --</option>';
+        RANKS.forEach(r => rs.innerHTML += `<option value="${r.id}" ${r.id===oldR?'selected':''}>${r[curLang]}</option>`);
+    }
+
+    function refreshSpecs() {
+        const cId = document.getElementById('classSel').value;
+        const ts = document.getElementById('typeSel');
+        const oldT = ts.value;
+        ts.innerHTML = '<option value="">-- Spec --</option>';
+        if(cId) {
+            CLASSES[cId].specs.forEach(s => ts.innerHTML += `<option value="${s}" ${s===oldT?'selected':''}>${SPECS[s][curLang]}</option>`);
+        } else {
+            for(let s in SPECS) ts.innerHTML += `<option value="${s}" ${s===oldT?'selected':''}>${SPECS[s][curLang]}</option>`;
+        }
+    }
+
+    function onTypeSelect() {
+        const tId = document.getElementById('typeSel').value;
+        if(tId) {
+            for(let c in CLASSES) { if(CLASSES[c].specs.includes(tId)) { document.getElementById('classSel').value = c; break; } }
+        }
+        render();
+    }
+
+    function render() {
+        const tId = document.getElementById('typeSel').value;
+        const rId = document.getElementById('rankSel').value;
+        const area = document.getElementById('viewArea');
+        if(!tId || !rId) { area.innerHTML = ""; return; }
+
+        const spec = SPECS[tId];
+        const u = UI[curLang];
+
+        area.innerHTML = PARTS.map(p => {
+            const forbiddenList = FORBIDDEN_BY_PART[p.id];
+            const isSub0NG = forbiddenList.includes(spec.sub[0]);
+            const isSub1NG = forbiddenList.includes(spec.sub[1]);
+            const isNG = isSub0NG || isSub1NG;
+            const mainName = STAT_DIC[spec.main][curLang];
+
+            return `
+                <div class="equip-card">
+                    <div class="equip-header"><span class="part-name">${p.n}</span></div>
+                    <div class="judge-banner ${isNG?'no-drop':'can-drop'}">${isNG ? u.ng : u.ok}</div>
+                    <div class="stat-area">
+                        <div class="stat-line"><span class="highlight">${mainName}</span><span>MAX</span></div>
+                        <div class="stat-line">
+                            <span class="${isSub0NG ? 'ng-stat' : 'highlight'}">${STAT_DIC[spec.sub[0]][curLang]}</span>
+                            <span>${isSub0NG ? '❌' : '👍'}</span>
+                        </div>
+                        <div class="stat-line">
+                            <span class="${isSub1NG ? 'ng-stat' : 'highlight'}">${STAT_DIC[spec.sub[1]][curLang]}</span>
+                            <span>${isSub1NG ? '❌' : '👍'}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+    setLang('JP');
+</script>
+</body>
+</html>
